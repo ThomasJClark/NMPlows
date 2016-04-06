@@ -1,6 +1,7 @@
 package edu.wpi.nmplows;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorManager;
@@ -12,6 +13,9 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.*;
+import com.firebase.client.Firebase;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -25,6 +29,7 @@ import java.util.Objects;
 public class MainActivity extends AppCompatActivity implements ActivityCompat.OnRequestPermissionsResultCallback, LocationListener {
 
     private static final String TAG = "MainActivity";
+    private static final String BASE_URL = "https://nmplows.firebaseio.com";
 
     private static final double MPS_TO_MPH = 2.23694;
 
@@ -39,36 +44,9 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
     private TextView longitude;
     private TextView speed;
     private TextView bearing;
+    private Firebase firebase;
 
-    private final Object jsonLock = new Object();
-    private final JSONObject json = new JSONObject();
-    private final Runnable networkThread = new Runnable() {
-        @Override
-        public void run() {
-            Log.i(TAG, "Running network thread");
-
-            while (true) {
-                Log.i(TAG, "Waiting for JSON data");
-
-                try {
-                    String data;
-                    synchronized (jsonLock) {
-                        jsonLock.wait();
-                        data = json.toString();
-                    }
-
-                    HttpURLConnection connection = (HttpURLConnection) new URL("https://nmplows.firebaseio.com/plows/nm" + plowId.getText() + ".json").openConnection();
-                    connection.setRequestMethod("PUT");
-                    connection.setRequestProperty("Content-Type", "application/json");
-                    connection.getOutputStream().write(data.getBytes());
-                    Log.d(TAG, connection.getResponseCode() + " " + connection.getResponseMessage());
-                    connection.disconnect();
-                } catch (IOException | InterruptedException e) {
-                    Log.e(TAG, "Error sending JSON data", e);
-                }
-            }
-        }
-    };
+    private final Plow plow = new Plow();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,7 +65,7 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
         speed = (TextView) findViewById(R.id.speed);
         bearing = (TextView) findViewById(R.id.bearing);
 
-        new Thread(networkThread).start();
+        Firebase.setAndroidContext(this);
 
         running.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -99,6 +77,7 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
                 }
             }
         });
+
     }
 
     @Override
@@ -106,11 +85,21 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
         startTracking();
     }
 
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        Log.i(TAG, "Activity result: " + requestCode + " " + resultCode);
+
+        if (requestCode == IntentIntegrator.REQUEST_CODE) {
+            IntentResult scanningResult = IntentIntegrator.parseActivityResult(requestCode, resultCode, intent);
+            Log.i(TAG, "Scanning result: " + scanningResult.toString());
+        }
+    }
+
     private void startTracking() {
+        Log.d(TAG, "Starting tracking");
+
         progressBar.setVisibility(View.VISIBLE);
         plowId.setEnabled(false);
-
-        Log.d(TAG, "Starting tracking");
 
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             Log.d(TAG, "Requesting location permissions");
@@ -118,53 +107,45 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
             return;
         }
 
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0.0f, this);
+        firebase = new Firebase(BASE_URL + "/plows/nm" + plowId.getText());
+        firebase.authAnonymously(null);
+
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 10000, 100.0f, this);
     }
 
     private void stopTracking() {
+        Log.d(TAG, "Stopping tracking");
+
         progressBar.setVisibility(View.GONE);
         plowId.setEnabled(true);
-
-        Log.d(TAG, "Stopping tracking");
 
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             locationManager.removeUpdates(this);
         }
+
+        Log.i(TAG, "removeValue");
+        firebase.removeValue();
     }
 
     @Override
     public void onLocationChanged(Location location) {
         Log.d(TAG, "Got location update");
 
+        plow.id = Integer.valueOf(plowId.getText().toString());
+        plow.time = location.getTime();
+        plow.latitude = location.getLatitude();
+        plow.longitude = location.getLongitude();
+        if (location.hasSpeed()) plow.speed = location.getSpeed() * MPS_TO_MPH;
+        if (location.hasBearing()) plow.bearing = bearingLabel(location.getBearing());
+
+        firebase.setValue(plow);
+
         progressBar.setVisibility(View.GONE);
-
-        try {
-            synchronized (jsonLock) {
-                json.put("time", location.getTime() / 1000);
-                time.setText(new Date(location.getTime()).toString());
-
-                json.put("latitude", location.getLatitude());
-                latitude.setText(String.format("%f°", location.getLatitude()));
-
-                json.put("longitude", location.getLongitude());
-                longitude.setText(String.format("%f°", location.getLongitude()));
-
-                if (location.hasSpeed()) {
-                    json.put("speed", location.getSpeed() * MPS_TO_MPH);
-                    speed.setText(String.format("%f mph", location.getSpeed() * MPS_TO_MPH));
-                }
-
-                if (location.hasBearing()) {
-                    String label = bearingLabel(location.getBearing());
-                    json.put("bearing", label);
-                    bearing.setText(label);
-                }
-
-                jsonLock.notify();
-            }
-        } catch (JSONException e) {
-            throw new RuntimeException(e);
-        }
+        time.setText(new Date(plow.time).toString());
+        latitude.setText(String.format("%f°", plow.latitude));
+        longitude.setText(String.format("%f°", plow.longitude));
+        speed.setText(String.format("%f mph", plow.speed));
+        bearing.setText(plow.bearing);
     }
 
     @Override
