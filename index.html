@@ -22,16 +22,18 @@
 
   <script>
     require([
-      "esri/map", "esri/geometry/Point", "esri/symbols/SimpleMarkerSymbol",
-      "esri/graphic", "esri/SpatialReference", "esri/InfoTemplate", "esri/Color"
-    ], function(Map, Point, SimpleMarkerSymbol, Graphic, SpatialReference, InfoTemplate, Color) {
-
+      "esri/map", "esri/geometry/Point", "esri/geometry/Polyline", "esri/symbols/SimpleMarkerSymbol",
+      "esri/symbols/SimpleLineSymbol", "esri/graphic", "esri/SpatialReference",
+      "esri/InfoTemplate", "esri/Color"
+    ], function(Map, Point, Polyline, SimpleMarkerSymbol, SimpleLineSymbol, Graphic, SpatialReference, InfoTemplate, Color) {
       // Make a map centered on New Mexico
       var map = new Map("map", {basemap: "streets", center: [-105.8701, 34.5199], zoom: 7});
 
       // An SVG plow icon used to mark plow locations
-      var plowSymbol = new SimpleMarkerSymbol(SimpleMarkerSymbol.STYLE_PATH, 28, null, new Color("#AC2B37"));
+      var plowSymbol = new SimpleMarkerSymbol(SimpleMarkerSymbol.STYLE_PATH, 28, null, new Color("black"));
       plowSymbol.setPath("m16 8 0 2-4 0-2 5-3 0 0 2-1 0c-0.2-2.9-1.6-5.4-3.6-5.9-0.3-0.1-0.5-0.1-0.8-0.1 1.4 0.9 2.1 3.9 1.8 7-0.4 3.1-1.3 5.5-3.3 5.6 0.3 0.1 0.5 0.2 0.8 0.3 2.1 0.5 4.1-1.1 4.9-3.9l1.3 0 0 1-1 0 0 1 3.2 0c0.4 1.2 1.6 2 2.8 2 1.3 0 2.4-0.8 2.8-2l6.2 0 0-1 2 0c0 1.7 1.3 3 3 3 1.7 0 3-1.3 3-3l3 0 0-13z");
+
+      var historySymbol = new SimpleLineSymbol();
 
       // The info included when you click on a plow
       var plowInfoTemplate = new InfoTemplate("Plow ${id}",
@@ -46,29 +48,45 @@
         firebase.authAnonymously();
 
         var plows = {};
+        var histories = {};
 
         // When a new plow is added to the Firebase, add a new graphic for the
         // plow and store it so it can be updated later.
         firebase.on("child_added", function(data) {
           var plow = data.val();
           plows[data.key()] = map.graphics.add(new Graphic(plowGeometry(plow), plowSymbol, plow, plowInfoTemplate));
+          histories[data.key()] = map.graphics.add(new Graphic(historyGeometry(plow), historySymbol));
         });
 
         // When a plow is changed, update the corresponding graphic.
         firebase.on("child_changed", function(data) {
           var plow = data.val();
           plows[data.key()].setAttributes(plow).setGeometry(plowGeometry(plow));
+          histories[data.key()].setGeometry(historyGeometry(plow));
         });
 
         // When a plow is removed, remove the corresponding graphic.
         firebase.on("child_removed", function(data) {
           map.graphics.remove(plows[data.key()]);
+          map.graphics.remove(histories[data.key()]);
           delete plows[data.key()];
+          delete histories[data.key()];
         })
       });
 
       function plowGeometry(plow) {
-        return new Point(plow.longitude, plow.latitude, new SpatialReference(4326));
+        return new Point({
+          x: plow.longitude,
+          y: plow.latitude,
+          spatialReference: {wkid: 4326}
+        });
+      }
+
+      function historyGeometry(plow) {
+        return new Polyline({
+          paths: [plow.history.map(function(d) { return [d.longitude, d.latitude]; })],
+          spatialReference: {wkid: 4326}
+        });
       }
     });
   </script>
