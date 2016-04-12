@@ -5,26 +5,20 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorManager;
-import android.location.*;
-import android.support.annotation.NonNull;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Bundle;
 import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.*;
 import com.firebase.client.Firebase;
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
-import org.json.JSONException;
-import org.json.JSONObject;
 
-import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.Date;
-import java.util.Objects;
 
 public class MainActivity extends AppCompatActivity implements ActivityCompat.OnRequestPermissionsResultCallback, LocationListener {
 
@@ -46,7 +40,8 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
     private TextView bearing;
     private Firebase firebase;
 
-    private final Plow plow = new Plow();
+    private AvlRecord latestRecord = new AvlRecord();
+    private Plow plow;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -110,7 +105,7 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
         firebase = new Firebase(BASE_URL + "/plows/nm" + plowId.getText());
         firebase.authAnonymously(null);
 
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 10000, 100.0f, this);
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 5.0f, this);
     }
 
     private void stopTracking() {
@@ -131,46 +126,37 @@ public class MainActivity extends AppCompatActivity implements ActivityCompat.On
     public void onLocationChanged(Location location) {
         Log.d(TAG, "Got location update");
 
-        plow.id = Integer.valueOf(plowId.getText().toString());
+        int id = Integer.valueOf(plowId.getText().toString());
+        if (plow == null || plow.id != id) {
+            plow = new Plow(id);
+        }
+
+        plow.addRecord(new AvlRecord(location.getLatitude(), location.getLongitude()));
         plow.time = location.getTime();
-        plow.latitude = location.getLatitude();
-        plow.longitude = location.getLongitude();
         if (location.hasSpeed()) plow.speed = location.getSpeed() * MPS_TO_MPH;
         if (location.hasBearing()) plow.bearing = bearingLabel(location.getBearing());
 
+        Log.i(TAG, plow.toString());
         firebase.setValue(plow);
 
         progressBar.setVisibility(View.GONE);
         time.setText(new Date(plow.time).toString());
-        latitude.setText(String.format("%f°", plow.latitude));
-        longitude.setText(String.format("%f°", plow.longitude));
+        latitude.setText(String.format("%f°", location.getLatitude()));
+        longitude.setText(String.format("%f°", location.getLongitude()));
         speed.setText(String.format("%f mph", plow.speed));
         bearing.setText(plow.bearing);
     }
 
     @Override
     public void onStatusChanged(String provider, int status, Bundle extras) {
-        switch (status) {
-            case LocationProvider.OUT_OF_SERVICE:
-                Log.d(TAG, "Location status changed: " + provider + " out of service");
-                break;
-            case LocationProvider.AVAILABLE:
-                Log.d(TAG, "Location status changed: " + provider + " available");
-                break;
-            case LocationProvider.TEMPORARILY_UNAVAILABLE:
-                Log.d(TAG, "Location status changed: " + provider + " temporarily unavailable");
-                break;
-        }
     }
 
     @Override
     public void onProviderEnabled(String provider) {
-        Log.d(TAG, "Location provider enabled: " + provider);
     }
 
     @Override
     public void onProviderDisabled(String provider) {
-        Log.d(TAG, "Location provider disabled: " + provider);
     }
 
     private String bearingLabel(float bearing) {
